@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from .routes import auth, applications, checklist, dashboard, integrations
+from .routes import auth, applications, checklist, dashboard, integrations, validations
 
 api_router = APIRouter()
 
@@ -16,4 +16,7 @@ api_router.include_router(checklist.router, tags=["checklist"])
 api_router.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
 
 # Integration routes
-api_router.include_router(integrations.router, prefix="/automations", tags=["automations"]) 
+api_router.include_router(integrations.router, prefix="/automations", tags=["automations"])
+
+# Validation routes
+api_router.include_router(validations.router, tags=["validations"]) 

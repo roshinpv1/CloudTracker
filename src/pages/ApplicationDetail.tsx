@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Navigate, Link, useNavigate } from 'react-router-dom';
-import { CheckCircle2, AlertCircle, Clock3, Circle, PlusCircle, Save, Clipboard, ArrowLeft, Trash2 } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Clock3, Circle, PlusCircle, Save, Clipboard, ArrowLeft, Trash2, Play } from 'lucide-react';
 import ApplicationHeader from '../components/ApplicationHeader';
 import ChecklistTable from '../components/ChecklistTable';
 import { Status, Application, ApplicationStatus } from '../types';
 import { useAuth, useAuthorization } from '../context/AuthContext';
 import { useNotification } from '../context/NotificationContext';
 import { getApplication, deleteApplication, updateApplication } from '../data/api';
+import { requestBatchValidation } from '../data/validationApi';
 
 const ApplicationDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -19,6 +20,7 @@ const ApplicationDetail: React.FC = () => {
   const [application, setApplication] = useState<Application | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isValidating, setIsValidating] = useState(false);
   
   useEffect(() => {
     const fetchApplication = async () => {
@@ -168,6 +170,53 @@ const ApplicationDetail: React.FC = () => {
     }
   };
   
+  // Handle requesting validation for all requirements in the active tab
+  const handleRequestValidation = async () => {
+    if (!application) return;
+    
+    const targetCategories = activeTab === 'application' 
+      ? application.applicationCategories || [] 
+      : application.platformCategories || [];
+    
+    if (targetCategories.length === 0) {
+      addNotification('warning', 'No checklist items to validate');
+      return;
+    }
+    
+    setIsValidating(true);
+    
+    try {
+      // Collect all checklist item IDs from all categories
+      const allItemIds = targetCategories.flatMap(category => 
+        category.items ? category.items.map(item => item.id) : []
+      );
+      
+      if (allItemIds.length === 0) {
+        addNotification('warning', 'No checklist items to validate');
+        return;
+      }
+      
+      await requestBatchValidation({
+        checklist_item_ids: allItemIds,
+        validation_type: 'ai_assisted',
+        evidence_context: `Full ${activeTab} validation for ${application.name}`
+      });
+      
+      addNotification('success', `Validation requested for ${allItemIds.length} ${activeTab} requirements`);
+      
+      // Refresh application data to show updated status
+      if (id) {
+        const updatedApp = await getApplication(id);
+        setApplication(updatedApp);
+      }
+    } catch (error) {
+      console.error(`Failed to request ${activeTab} validation:`, error);
+      addNotification('error', `Failed to request ${activeTab} validation`);
+    } finally {
+      setIsValidating(false);
+    }
+  };
+
   return (
     <div className="pt-20 pb-6 bg-neutral-50 min-h-screen">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -268,59 +317,74 @@ const ApplicationDetail: React.FC = () => {
           
           {/* Main content */}
           <div className="lg:col-span-3">
-            <div className="bg-white shadow-sm border border-neutral-200 rounded-sm mb-6">
-              <div className="border-b border-neutral-200">
-                <nav className="flex" aria-label="Tabs">
-                  <button
-                    onClick={() => setActiveTab('application')}
-                    className={`w-1/2 py-3 px-1 text-center font-medium text-sm ${
-                      activeTab === 'application'
-                        ? 'border-b-2 border-primary text-primary'
-                        : 'text-neutral-600 hover:text-navy'
-                    }`}
-                  >
-                    Application Requirements
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('platform')}
-                    className={`w-1/2 py-3 px-1 text-center font-medium text-sm ${
-                      activeTab === 'platform'
-                        ? 'border-b-2 border-primary text-primary'
-                        : 'text-neutral-600 hover:text-navy'
-                    }`}
-                  >
-                    Platform Requirements
-                  </button>
-                </nav>
+            <div className="bg-white shadow-sm border border-neutral-200 rounded-sm overflow-hidden">
+              <div className="flex border-b border-neutral-200">
+                <button
+                  onClick={() => setActiveTab('application')}
+                  className={`px-6 py-4 text-base font-medium ${
+                    activeTab === 'application'
+                      ? 'text-primary border-b-2 border-primary'
+                      : 'text-neutral-600 hover:text-primary'
+                  }`}
+                >
+                  Application Requirements
+                </button>
+                <button
+                  onClick={() => setActiveTab('platform')}
+                  className={`px-6 py-4 text-base font-medium ${
+                    activeTab === 'platform'
+                      ? 'text-primary border-b-2 border-primary'
+                      : 'text-neutral-600 hover:text-primary'
+                  }`}
+                >
+                  Platform Requirements
+                </button>
+                
+                <div className="ml-auto flex items-center pr-4">
+                  {canEdit && (
+                    <button
+                      onClick={handleRequestValidation}
+                      disabled={isValidating}
+                      className={`inline-flex items-center px-4 py-2 border border-indigo-300 text-sm font-medium rounded-md text-indigo-700 bg-indigo-50 hover:bg-indigo-100 ${
+                        isValidating ? 'opacity-50 cursor-not-allowed' : ''
+                      }`}
+                    >
+                      <Play size={16} className="mr-2" />
+                      {isValidating 
+                        ? 'Processing...' 
+                        : `Validate All ${activeTab === 'application' ? 'Application' : 'Platform'} Requirements`}
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-            
-            <div className="space-y-5">
-              {activeTab === 'application' ? (
-                <>
-                  {appCategories.length > 0 ? (
-                    appCategories.map(category => (
-                      <ChecklistTable key={category.id} category={category} canEdit={canEdit} />
-                    ))
-                  ) : (
-                    <div className="bg-white p-4 text-center text-gray-500">
-                      No application categories found.
-                    </div>
-                  )}
-                </>
-              ) : (
-                <>
-                  {platformCategories.length > 0 ? (
-                    platformCategories.map(category => (
-                      <ChecklistTable key={category.id} category={category} canEdit={canEdit} />
-                    ))
-                  ) : (
-                    <div className="bg-white p-4 text-center text-gray-500">
-                      No platform categories found.
-                    </div>
-                  )}
-                </>
-              )}
+
+              <div className="p-6">
+                {activeTab === 'application' ? (
+                  <>
+                    {appCategories.length > 0 ? (
+                      appCategories.map(category => (
+                        <ChecklistTable key={category.id} category={category} canEdit={canEdit} />
+                      ))
+                    ) : (
+                      <div className="bg-white p-4 text-center text-gray-500">
+                        No application categories found.
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {platformCategories.length > 0 ? (
+                      platformCategories.map(category => (
+                        <ChecklistTable key={category.id} category={category} canEdit={canEdit} />
+                      ))
+                    ) : (
+                      <div className="bg-white p-4 text-center text-gray-500">
+                        No platform categories found.
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
           </div>
         </div>
