@@ -1,18 +1,22 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from uuid import uuid4
 from datetime import datetime, timedelta
+import json
+import pocketflow as pf
 
 from ...db.database import get_db
-from ...models.models import ChecklistItem, Application
+from ...models.models import ChecklistItem, Application, Platform
 from ...models.validation import ValidationRequest as ValidationRequestModel
 from ...models.validation import ValidationResult as ValidationResultModel
 from ...schemas.validation import (
     ValidationRequest, BatchValidationRequest, ValidationResponse, BatchValidationResponse,
-    ValidationResult, ValidationStatus, ValidationSourceType
+    ValidationResult, ValidationStatus, ValidationSourceType, AppValidationRequest,
+    ValidationWorkflowStatus, ValidationStep, ValidationStepStatus
 )
 from ...core.validation_service import ValidationService
+from ...core.workflow_service import WorkflowService
 from ...core.auth import (
     get_any_authenticated_user,
     get_reviewer_or_admin_user,
@@ -21,6 +25,143 @@ from ...core.auth import (
 )
 
 router = APIRouter(tags=["validations"])
+
+@router.post("/validations/app/{app_id}", response_model=ValidationResponse)
+async def validate_application(
+    app_id: str,
+    validation_request: AppValidationRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_reviewer_or_admin_user)
+):
+    """Initiate a full application validation workflow including all components."""
+    # Check if application exists
+    application = db.query(Application).filter(Application.id == app_id).first()
+    if not application:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Application {app_id} not found"
+        )
+    
+    # Create a workflow ID for this validation
+    workflow_id = str(uuid4())
+    
+    # Initialize workflow in the database
+    workflow = WorkflowService.initialize_workflow(
+        db=db,
+        workflow_id=workflow_id,
+        application_id=app_id,
+        request_data=validation_request.dict(),
+        user_id=current_user.id
+    )
+    
+    # Schedule the validation workflow in background
+    background_tasks.add_task(
+        WorkflowService.run_validation_workflow,
+        db_session=db,
+        workflow_id=workflow_id,
+        application=application,
+        validation_request=validation_request
+    )
+    
+    # Return validation response
+    estimated_time = datetime.utcnow() + timedelta(minutes=5)
+    return ValidationResponse(
+        validation_id=workflow_id,
+        status=ValidationStatus.PENDING,
+        message="Application validation workflow has been initiated",
+        estimated_completion_time=estimated_time
+    )
+
+@router.get("/validations/workflow/{workflow_id}", response_model=ValidationWorkflowStatus)
+async def get_validation_workflow_status(
+    workflow_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_any_authenticated_user)
+):
+    """Get the current status of a validation workflow including all steps."""
+    workflow = WorkflowService.get_workflow(db, workflow_id)
+    if not workflow:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Validation workflow {workflow_id} not found"
+        )
+    
+    # Convert the SQLAlchemy model to a dictionary that the Pydantic model can validate
+    workflow_dict = {
+        "id": workflow.id,
+        "application_id": workflow.application_id,
+        "status": workflow.status,
+        "created_at": workflow.created_at,
+        "updated_at": workflow.updated_at,
+        "completed_at": workflow.completed_at,
+        "initiated_by": workflow.initiated_by,
+        "repository_url": workflow.repository_url,
+        "commit_id": workflow.commit_id,
+        "overall_compliance": workflow.overall_compliance,
+        "summary": workflow.summary,
+        "steps": [
+            {
+                "id": step.id,
+                "workflow_id": step.workflow_id,
+                "step_type": step.step_type,
+                "status": step.status,
+                "started_at": step.started_at,
+                "completed_at": step.completed_at,
+                "result_summary": step.result_summary,
+                "details": step.details,
+                "error_message": step.error_message,
+                "integration_source": step.integration_source
+            } for step in workflow.steps
+        ]
+    }
+    
+    return workflow_dict
+
+@router.get("/validations/app/{app_id}/latest", response_model=ValidationWorkflowStatus)
+async def get_latest_app_validation(
+    app_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_any_authenticated_user)
+):
+    """Get the latest validation workflow for an application."""
+    latest_workflow = WorkflowService.get_latest_workflow_for_app(db, app_id)
+    if not latest_workflow:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No validation workflows found for application {app_id}"
+        )
+    
+    # Convert the SQLAlchemy model to a dictionary that the Pydantic model can validate
+    workflow_dict = {
+        "id": latest_workflow.id,
+        "application_id": latest_workflow.application_id,
+        "status": latest_workflow.status,
+        "created_at": latest_workflow.created_at,
+        "updated_at": latest_workflow.updated_at,
+        "completed_at": latest_workflow.completed_at,
+        "initiated_by": latest_workflow.initiated_by,
+        "repository_url": latest_workflow.repository_url,
+        "commit_id": latest_workflow.commit_id,
+        "overall_compliance": latest_workflow.overall_compliance,
+        "summary": latest_workflow.summary,
+        "steps": [
+            {
+                "id": step.id,
+                "workflow_id": step.workflow_id,
+                "step_type": step.step_type,
+                "status": step.status,
+                "started_at": step.started_at,
+                "completed_at": step.completed_at,
+                "result_summary": step.result_summary,
+                "details": step.details,
+                "error_message": step.error_message,
+                "integration_source": step.integration_source
+            } for step in latest_workflow.steps
+        ]
+    }
+    
+    return workflow_dict
 
 @router.post("/validations/request", response_model=ValidationResponse)
 async def request_validation(

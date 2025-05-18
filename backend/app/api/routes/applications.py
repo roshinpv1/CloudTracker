@@ -60,7 +60,56 @@ def get_applications(db: Session = Depends(get_db), current_user: User = Depends
     
     print(f"Loaded and deduplicated {len(applications)} applications")
     
-    return applications
+    # Convert SQLAlchemy models to dictionaries before returning
+    # This ensures proper serialization of nested relationships
+    app_dicts = []
+    for app in applications:
+        app_dict = {c.name: getattr(app, c.name) for c in app.__table__.columns}
+        # Use the field names expected by the frontend
+        app_dict['applicationCategories'] = [
+            {
+                'id': cat.id,
+                'name': cat.name,
+                'category_type': cat.category_type,
+                'items': [
+                    {
+                        'id': item.id,
+                        'description': item.description,
+                        'status': item.status,
+                        'last_updated': item.last_updated,
+                        'comments': item.comments,
+                        'evidence': item.evidence,
+                        'category_id': item.category_id
+                    } for item in cat.checklist_items
+                ]
+            } for cat in app.application_categories
+        ]
+        app_dict['platformCategories'] = [
+            {
+                'id': cat.id,
+                'name': cat.name,
+                'category_type': cat.category_type,
+                'items': [
+                    {
+                        'id': item.id,
+                        'description': item.description,
+                        'status': item.status,
+                        'last_updated': item.last_updated,
+                        'comments': item.comments,
+                        'evidence': item.evidence,
+                        'category_id': item.category_id
+                    } for item in cat.checklist_items
+                ]
+            } for cat in app.platform_categories
+        ]
+        # Remove old field names that would conflict with the frontend
+        if 'application_categories' in app_dict:
+            del app_dict['application_categories']
+        if 'platform_categories' in app_dict:
+            del app_dict['platform_categories']
+        app_dicts.append(app_dict)
+    
+    return app_dicts
 
 # All authenticated users can get a specific application
 @router.get("/{application_id}", response_model=ApplicationSchema)
@@ -91,7 +140,62 @@ def get_application(
     for category in application.platform_categories:
         print(f"Deduplicated checklist items for platform category {category.id}: {len(category.checklist_items)} items")
     
-    return application
+    # Convert SQLAlchemy model to dictionary before returning
+    app_dict = {c.name: getattr(application, c.name) for c in application.__table__.columns}
+    # Use the field names expected by the frontend
+    app_dict['applicationCategories'] = [
+        {
+            'id': cat.id,
+            'name': cat.name,
+            'category_type': cat.category_type,
+            'items': [
+                {
+                    'id': item.id,
+                    'description': item.description,
+                    'status': item.status,
+                    'last_updated': item.last_updated,
+                    'comments': item.comments,
+                    'evidence': item.evidence,
+                    'category_id': item.category_id
+                } for item in cat.checklist_items
+            ]
+        } for cat in application.application_categories
+    ]
+    app_dict['platformCategories'] = [
+        {
+            'id': cat.id,
+            'name': cat.name,
+            'category_type': cat.category_type,
+            'items': [
+                {
+                    'id': item.id,
+                    'description': item.description,
+                    'status': item.status,
+                    'last_updated': item.last_updated,
+                    'comments': item.comments,
+                    'evidence': item.evidence,
+                    'category_id': item.category_id
+                } for item in cat.checklist_items
+            ]
+        } for cat in application.platform_categories
+    ]
+    
+    # Debugging serialization
+    print(f"Serialized applicationCategories: {len(app_dict['applicationCategories'])}")
+    for cat in app_dict['applicationCategories']:
+        print(f"  Category {cat['id']}: {len(cat['items'])} items")
+        
+    print(f"Serialized platformCategories: {len(app_dict['platformCategories'])}")
+    for cat in app_dict['platformCategories']:
+        print(f"  Category {cat['id']}: {len(cat['items'])} items")
+    
+    # Remove old field names that would conflict with the frontend
+    if 'application_categories' in app_dict:
+        del app_dict['application_categories']
+    if 'platform_categories' in app_dict:
+        del app_dict['platform_categories']
+    
+    return app_dict
 
 # All authenticated users can create a new application
 @router.post("", response_model=ApplicationSchema)
@@ -303,24 +407,60 @@ def create_application(
     # Commit all changes
     db.commit()
     
-    # Step 5: Reload the application with all its related data
-    from sqlalchemy.orm import joinedload
+    # After creating all categories and checklist items, refresh the application to load relationships
+    db.refresh(db_application)
     
-    complete_application = db.query(Application).options(
+    # Load the application with all the relationships to ensure they're available for serialization
+    application = db.query(Application).options(
         joinedload(Application.application_categories).joinedload(Category.checklist_items),
         joinedload(Application.platform_categories).joinedload(Category.checklist_items)
-    ).filter_by(id=db_application.id).first()
+    ).filter(Application.id == db_application.id).first()
     
-    print(f"Final application has {len(complete_application.application_categories)} application categories and {len(complete_application.platform_categories)} platform categories")
+    # Convert SQLAlchemy model to dictionary before returning
+    app_dict = {c.name: getattr(application, c.name) for c in application.__table__.columns}
+    app_dict['applicationCategories'] = [
+        {
+            'id': cat.id,
+            'name': cat.name,
+            'category_type': cat.category_type,
+            'items': [
+                {
+                    'id': item.id,
+                    'description': item.description,
+                    'status': item.status,
+                    'last_updated': item.last_updated,
+                    'comments': item.comments,
+                    'evidence': item.evidence,
+                    'category_id': item.category_id
+                } for item in cat.checklist_items
+            ]
+        } for cat in application.application_categories
+    ]
+    app_dict['platformCategories'] = [
+        {
+            'id': cat.id,
+            'name': cat.name,
+            'category_type': cat.category_type,
+            'items': [
+                {
+                    'id': item.id,
+                    'description': item.description,
+                    'status': item.status,
+                    'last_updated': item.last_updated,
+                    'comments': item.comments,
+                    'evidence': item.evidence,
+                    'category_id': item.category_id
+                } for item in cat.checklist_items
+            ]
+        } for cat in application.platform_categories
+    ]
+    # Remove old field names that would conflict with the frontend
+    if 'application_categories' in app_dict:
+        del app_dict['application_categories']
+    if 'platform_categories' in app_dict:
+        del app_dict['platform_categories']
     
-    # Log the structure for verification
-    for cat in complete_application.application_categories:
-        print(f"App category {cat.id} has {len(cat.checklist_items)} items")
-        
-    for cat in complete_application.platform_categories:
-        print(f"Platform category {cat.id} has {len(cat.checklist_items)} items")
-    
-    return complete_application
+    return app_dict
 
 # Only reviewers and admins can update applications
 @router.put("/{application_id}", response_model=ApplicationSchema)
@@ -330,20 +470,80 @@ def update_application(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_reviewer_or_admin_user)
 ):
+    """Update an existing application with new data."""
+    
+    # Get the existing application
     db_application = db.query(Application).filter(Application.id == application_id).first()
     if db_application is None:
         raise HTTPException(status_code=404, detail="Application not found")
     
-    # Update application fields
+    # Update the application fields
     for key, value in application.model_dump(exclude_unset=True).items():
         setattr(db_application, key, value)
     
-    # Update the updated_at timestamp
-    db_application.updated_at = datetime.utcnow()
+    # Record the activity
+    activity = Activity(
+        id=str(uuid4()),
+        action="updated",
+        user_id=current_user.id,
+        application_id=application_id
+    )
+    db.add(activity)
     
     db.commit()
     db.refresh(db_application)
-    return db_application
+    
+    # Load the updated application with all relationships
+    updated_app = db.query(Application).options(
+        joinedload(Application.application_categories).joinedload(Category.checklist_items),
+        joinedload(Application.platform_categories).joinedload(Category.checklist_items)
+    ).filter(Application.id == application_id).first()
+    
+    # Convert SQLAlchemy model to dictionary before returning
+    app_dict = {c.name: getattr(updated_app, c.name) for c in updated_app.__table__.columns}
+    app_dict['applicationCategories'] = [
+        {
+            'id': cat.id,
+            'name': cat.name,
+            'category_type': cat.category_type,
+            'items': [
+                {
+                    'id': item.id,
+                    'description': item.description,
+                    'status': item.status,
+                    'last_updated': item.last_updated,
+                    'comments': item.comments,
+                    'evidence': item.evidence,
+                    'category_id': item.category_id
+                } for item in cat.checklist_items
+            ]
+        } for cat in updated_app.application_categories
+    ]
+    app_dict['platformCategories'] = [
+        {
+            'id': cat.id,
+            'name': cat.name,
+            'category_type': cat.category_type,
+            'items': [
+                {
+                    'id': item.id,
+                    'description': item.description,
+                    'status': item.status,
+                    'last_updated': item.last_updated,
+                    'comments': item.comments,
+                    'evidence': item.evidence,
+                    'category_id': item.category_id
+                } for item in cat.checklist_items
+            ]
+        } for cat in updated_app.platform_categories
+    ]
+    # Remove old field names that would conflict with the frontend
+    if 'application_categories' in app_dict:
+        del app_dict['application_categories']
+    if 'platform_categories' in app_dict:
+        del app_dict['platform_categories']
+    
+    return app_dict
 
 # Only admins can delete applications
 @router.delete("/{application_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -399,8 +599,12 @@ def associate_category(
     else:  # platform
         application.platform_categories.append(category)
     
+    # Get current checklist item count
+    current_item_count = len(category.checklist_items)
+    print(f"Before adding default items: Category {category.id} has {current_item_count} checklist items")
+    
     # If the category has no checklist items, add default items
-    if len(category.checklist_items) == 0:
+    if current_item_count == 0:
         # Define default items based on category IDs
         application_default_items = {
             'auditability': [
@@ -456,22 +660,50 @@ def associate_category(
         default_items = []
         if category_type == 'application' and category.id in application_default_items:
             default_items = application_default_items[category.id]
+            print(f"Using application default items for {category.id}: {len(default_items)} items")
         elif category_type == 'platform' and category.id.replace('platform-', '') in platform_default_items:
-            default_items = platform_default_items[category.id.replace('platform-', '')]
+            platform_key = category.id.replace('platform-', '')
+            default_items = platform_default_items[platform_key]
+            print(f"Using platform default items for {category.id} (key: {platform_key}): {len(default_items)} items")
+        else:
+            print(f"No default items found for category {category.id} of type {category_type}")
         
         # Create default checklist items
+        print(f"Creating {len(default_items)} default items for category {category.id}")
+        new_items = []
         for index, description in enumerate(default_items):
+            item_id = f"{category.id}-item-{index}-{str(uuid4())[:8]}"
+            print(f"Creating item {item_id}: '{description}'")
+            
             item = ChecklistItem(
-                id=f"{category.id}-item-{index}-{str(uuid4())[:8]}",
+                id=item_id,
                 description=description,
                 status='Not Started',  # Default status is 'Not Started'
                 category_id=category.id
             )
             db.add(item)
-            print(f"Created default checklist item for {category.id}: {description}")
+            new_items.append(item)
+        
+        print(f"Added {len(new_items)} new checklist items to category {category.id}")
+        db.flush()
     
+    # Commit all changes
     db.commit()
-    return {"detail": "Category associated with application"}
+    
+    # Refresh the category to get updated checklist items
+    db.refresh(category)
+    
+    # Verify items were added correctly
+    item_count_after = len(category.checklist_items)
+    print(f"After adding default items: Category {category.id} now has {item_count_after} checklist items")
+    
+    # Return success with category info
+    return {
+        "detail": "Category associated with application",
+        "category_id": category.id,
+        "items_count": len(category.checklist_items),
+        "items": [{"id": item.id, "description": item.description} for item in category.checklist_items]
+    }
 
 # Remove a category from an application - requires reviewer or admin
 @router.delete("/{application_id}/categories/{category_id}")

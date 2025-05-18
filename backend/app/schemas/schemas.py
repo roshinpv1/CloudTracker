@@ -48,17 +48,21 @@ class CategoryUpdate(BaseModel):
 
 class Category(CategoryBase):
     id: str
-    checklist_items: List[ChecklistItem] = []
+    items: List[ChecklistItem] = []
 
     class Config:
         from_attributes = True
+        # Map the model.checklist_items to schema.items
+        field_mappings = {
+            "items": "checklist_items"
+        }
         # Ensure that checklist_items are included by default and not omitted during serialization
         schema_extra = {
             "example": {
                 "id": "some-category-id",
                 "name": "Category Name",
                 "category_type": "application",
-                "checklist_items": [
+                "items": [
                     {
                         "id": "item-1",
                         "description": "Item description",
@@ -174,11 +178,16 @@ class Application(ApplicationBase):
     id: str
     created_at: datetime
     updated_at: datetime
-    application_categories: List[Category] = []
-    platform_categories: List[Category] = []
+    applicationCategories: List[Category] = []
+    platformCategories: List[Category] = []
 
     class Config:
         from_attributes = True
+        # Map model fields to schema fields
+        field_mappings = {
+            "applicationCategories": "application_categories",
+            "platformCategories": "platform_categories"
+        }
         # Ensure that nested relationships are included
         schema_extra = {
             "example": {
@@ -187,12 +196,12 @@ class Application(ApplicationBase):
                 "status": "In Review",
                 "created_at": "2023-01-01T00:00:00",
                 "updated_at": "2023-01-02T00:00:00",
-                "application_categories": [
+                "applicationCategories": [
                     {
                         "id": "auditability",
                         "name": "Auditability",
                         "category_type": "application",
-                        "checklist_items": [
+                        "items": [
                             {
                                 "id": "auditability-item-1",
                                 "description": "Log application messages",
@@ -203,12 +212,12 @@ class Application(ApplicationBase):
                         ]
                     }
                 ],
-                "platform_categories": [
+                "platformCategories": [
                     {
                         "id": "platform-alerting",
                         "name": "Alerting",
                         "category_type": "platform",
-                        "checklist_items": [
+                        "items": [
                             {
                                 "id": "platform-alerting-item-1",
                                 "description": "All alerting is actionable",

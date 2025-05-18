@@ -32,6 +32,28 @@ class User(Base):
     # Relationships
     activities = relationship("Activity", back_populates="user")
 
+class Platform(Base):
+    __tablename__ = "platforms"
+    
+    id = Column(String, primary_key=True, index=True)
+    name = Column(String, index=True)
+    description = Column(Text, nullable=True)
+    owner = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    
+    # Relationships
+    applications = relationship("Application", back_populates="platform")
+    categories = relationship(
+        "Category",
+        secondary=application_category_association,
+        primaryjoin="and_(Platform.id == Application.platform_id, "
+                   "Application.id == application_category_association.c.application_id, "
+                   "application_category_association.c.category_type == 'platform')",
+        secondaryjoin="Category.id == application_category_association.c.category_id",
+        viewonly=True
+    )
+
 class Application(Base):
     __tablename__ = "applications"
 
@@ -41,6 +63,16 @@ class Application(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
     description = Column(Text, nullable=True)
+    owner = Column(String, nullable=True)
+    platform_id = Column(String, ForeignKey("platforms.id"), nullable=True)
+    
+    # Repositories and integrations
+    repository_url = Column(String, nullable=True)
+    commit_id = Column(String, nullable=True)
+    jira_project_key = Column(String, nullable=True)
+    appdynamics_id = Column(String, nullable=True)
+    grafana_dashboard_id = Column(String, nullable=True)
+    splunk_index = Column(String, nullable=True)
     
     # Git Repository Information
     git_repo_link = Column(String, nullable=True)
@@ -138,6 +170,7 @@ class Application(Base):
     
     # Relationships
     activities = relationship("Activity", back_populates="application")
+    platform = relationship("Platform", back_populates="applications")
     
     # Use primaryjoin to filter by category_type
     application_categories = relationship(
@@ -173,6 +206,15 @@ class Category(Base):
     
     # Relationships - set lazy='joined' to ensure items are eagerly loaded and cascade='all, delete-orphan' for proper deletion
     checklist_items = relationship("ChecklistItem", back_populates="category", lazy='joined', cascade="all, delete-orphan")
+    
+    # Property to expose checklist_items as items for frontend compatibility
+    @property
+    def items(self):
+        """Return checklist items as an items property for frontend compatibility"""
+        return self.checklist_items
+        
+    def __repr__(self):
+        return f"<Category id={self.id} name={self.name} type={self.category_type} items={len(self.checklist_items)}>"
 
 class ChecklistItem(Base):
     __tablename__ = "checklist_items"
@@ -184,9 +226,14 @@ class ChecklistItem(Base):
     comments = Column(Text, nullable=True)
     evidence = Column(String, nullable=True)
     category_id = Column(String, ForeignKey("categories.id", ondelete="CASCADE"))
+    requirement_type = Column(String, nullable=True)  # Type of requirement (e.g., security, reliability, performance)
+    application_id = Column(String, ForeignKey("applications.id", ondelete="CASCADE"), nullable=True)
+    platform_id = Column(String, ForeignKey("platforms.id", ondelete="CASCADE"), nullable=True)
     
     # Relationships
     category = relationship("Category", back_populates="checklist_items")
+    application = relationship("Application", backref="checklist_items", foreign_keys=[application_id])
+    platform = relationship("Platform", backref="checklist_items", foreign_keys=[platform_id])
     
     # Add a unique constraint to prevent duplicates based on description and category
     __table_args__ = (

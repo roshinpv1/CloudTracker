@@ -183,28 +183,55 @@ export const getApplication = async (id: string): Promise<Application> => {
     const data = await response.json();
     console.log('Application API response data:', data);
     
+    // Access debug information to help diagnose issues
+    console.log('API response applicationCategories type:', data.applicationCategories ? 'exists' : 'missing');
+    console.log('API response application_categories type:', data.application_categories ? 'exists' : 'missing');
+    
+    if (data.applicationCategories) {
+      data.applicationCategories.forEach((cat: any, index: number) => {
+        console.log(`Category ${index}: ${cat.name}, items: ${cat.items ? cat.items.length : 'missing'}, checklist_items: ${cat.checklist_items ? cat.checklist_items.length : 'missing'}`);
+      });
+    }
+    
     // Normalize data to match frontend naming conventions
     const normalized = {
       ...data,
       createdAt: data.created_at,
       updatedAt: data.updated_at,
-      applicationCategories: Array.isArray(data.application_categories) ? data.application_categories.map((cat: any) => ({
+      applicationCategories: Array.isArray(data.applicationCategories) ? data.applicationCategories.map((cat: any) => ({
         ...cat,
-        items: Array.isArray(cat.checklist_items) ? cat.checklist_items.map((item: any) => ({
-          ...item,
-          lastUpdated: item.last_updated
-        })) : []
+        items: Array.isArray(cat.items) 
+          ? cat.items.map((item: any) => ({
+              ...item,
+              lastUpdated: item.last_updated || item.lastUpdated
+            }))
+          : Array.isArray(cat.checklist_items) 
+            ? cat.checklist_items.map((item: any) => ({
+                ...item,
+                lastUpdated: item.last_updated || item.lastUpdated
+              })) 
+            : []
       })) : [],
-      platformCategories: Array.isArray(data.platform_categories) ? data.platform_categories.map((cat: any) => ({
+      platformCategories: Array.isArray(data.platformCategories) ? data.platformCategories.map((cat: any) => ({
         ...cat,
-        items: Array.isArray(cat.checklist_items) ? cat.checklist_items.map((item: any) => ({
-          ...item,
-          lastUpdated: item.last_updated
-        })) : []
+        items: Array.isArray(cat.items)
+          ? cat.items.map((item: any) => ({
+              ...item,
+              lastUpdated: item.last_updated || item.lastUpdated
+            }))
+          : Array.isArray(cat.checklist_items)
+            ? cat.checklist_items.map((item: any) => ({
+                ...item,
+                lastUpdated: item.last_updated || item.lastUpdated
+              }))
+            : []
       })) : [],
     };
     
     console.log('Normalized application data:', normalized);
+    console.log('Application categories after normalization:', 
+      normalized.applicationCategories && normalized.applicationCategories.map((c: any) => 
+        `${c.name}: ${c.items ? c.items.length : 0} items`));
     
     return normalized;
   } catch (error) {

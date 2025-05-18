@@ -13,6 +13,20 @@ interface ChecklistTableProps {
   onItemUpdated?: () => void;  // Callback to refresh data
 }
 
+// Define a SafeItem type for our normalized items
+interface SafeItem {
+  id: string;
+  description: string;
+  status: Status;
+  lastUpdated?: string;
+  last_updated?: string;
+  categoryId?: string;
+  category_id?: string;
+  comments?: string;
+  evidence?: string;
+  requirement_type?: string;
+}
+
 const ChecklistTable: React.FC<ChecklistTableProps> = ({ category, canEdit = false, onItemUpdated }) => {
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [editData, setEditData] = useState<Partial<ChecklistItem>>({});
@@ -20,6 +34,24 @@ const ChecklistTable: React.FC<ChecklistTableProps> = ({ category, canEdit = fal
   const [showValidation, setShowValidation] = useState<string | null>(null);
   const [isBatchValidating, setIsBatchValidating] = useState(false);
   const { addNotification } = useNotification();
+
+  // Debug the category data received
+  console.log('ChecklistTable received category:', category);
+  console.log('Category items:', category.items);
+  console.log('Category checklist_items:', (category as any).checklist_items);
+  console.log('Category items type:', Array.isArray(category.items) ? 'array' : typeof category.items);
+  
+  // If items is not an array, try to fix it
+  if (!Array.isArray(category.items)) {
+    console.warn('Category items is not an array, attempting to fix');
+    if ((category as any).checklist_items && Array.isArray((category as any).checklist_items)) {
+      console.log('Found checklist_items array, using that instead');
+      category.items = (category as any).checklist_items;
+    } else {
+      console.error('No valid items array found for category', category);
+      category.items = [];
+    }
+  }
 
   // Handle requesting validation for all items in the category
   const handleBatchValidation = async () => {
@@ -128,8 +160,36 @@ const ChecklistTable: React.FC<ChecklistTableProps> = ({ category, canEdit = fal
     }
   };
 
-  // Ensure category has items
-  if (!category.items || !Array.isArray(category.items) || category.items.length === 0) {
+  // Ensure category has items and fix any data issues
+  if (!category || !category.items || !Array.isArray(category.items)) {
+    console.error('Invalid category structure:', category);
+    return (
+      <div className="bg-white shadow-md rounded-lg overflow-hidden mb-6">
+        <div className="px-4 py-4 sm:px-6 border-b border-gray-200 bg-gray-50">
+          <h3 className="text-lg leading-6 font-medium text-gray-900">
+            {category?.name || 'Unknown Category'}
+          </h3>
+        </div>
+        <div className="p-4 text-center text-gray-500">
+          Error loading items in this category.
+        </div>
+      </div>
+    );
+  }
+  
+  // Make sure all items have required fields and handle both snake_case and camelCase field names
+  const safeItems: SafeItem[] = (category.items || []).map(item => ({
+    id: item.id || '',
+    description: item.description || '',
+    status: item.status || 'Not Started',
+    lastUpdated: item.lastUpdated || (item as any).last_updated || '',
+    comments: item.comments || '',
+    evidence: item.evidence || '',
+    categoryId: item.categoryId || (item as any).category_id || ''
+  }));
+  
+  // If there are no valid items, show empty state
+  if (safeItems.length === 0) {
     return (
       <div className="bg-white shadow-md rounded-lg overflow-hidden mb-6">
         <div className="px-4 py-4 sm:px-6 border-b border-gray-200 bg-gray-50">
@@ -187,7 +247,7 @@ const ChecklistTable: React.FC<ChecklistTableProps> = ({ category, canEdit = fal
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {category.items.map((item) => (
+            {safeItems.map((item) => (
               <React.Fragment key={item.id}>
                 <tr className="hover:bg-gray-50 transition-colors duration-150">
                   <td className="px-6 py-4">

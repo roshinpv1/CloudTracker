@@ -27,6 +27,76 @@ class ValidationSeverity(str, enum.Enum):
     ERROR = "error"
     CRITICAL = "critical"
 
+class ValidationStepType(str, enum.Enum):
+    CODE_QUALITY = "code_quality"
+    SECURITY = "security"
+    PERFORMANCE = "performance"
+    DOCUMENTATION = "documentation"
+    DEPLOYMENT = "deployment"
+    MONITORING = "monitoring"
+    LOGGING = "logging"
+    EXTERNAL_INTEGRATION = "external_integration"
+    APP_REQUIREMENTS = "app_requirements"
+    PLATFORM_REQUIREMENTS = "platform_requirements"
+
+class ValidationStepStatus(str, enum.Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+class ValidationWorkflow(Base):
+    __tablename__ = "validation_workflows"
+    
+    id = Column(String, primary_key=True, index=True)
+    application_id = Column(String, ForeignKey("applications.id", ondelete="CASCADE"))
+    status = Column(Enum(ValidationStatus))
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+    initiated_by = Column(String, nullable=True)
+    repository_url = Column(String, nullable=True)
+    commit_id = Column(String, nullable=True)
+    request_data = Column(JSON, nullable=True)
+    overall_compliance = Column(Boolean, nullable=True)
+    summary = Column(Text, nullable=True)
+    
+    # Relationships
+    application = relationship("Application", backref="validation_workflows")
+    steps = relationship("ValidationStep", back_populates="workflow", cascade="all, delete-orphan")
+
+class ValidationStep(Base):
+    __tablename__ = "validation_steps"
+    
+    id = Column(String, primary_key=True, index=True)
+    workflow_id = Column(String, ForeignKey("validation_workflows.id", ondelete="CASCADE"))
+    step_type = Column(Enum(ValidationStepType))
+    status = Column(Enum(ValidationStepStatus), default=ValidationStepStatus.QUEUED)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    result_summary = Column(Text, nullable=True)
+    details = Column(JSON, nullable=True)
+    error_message = Column(Text, nullable=True)
+    integration_source = Column(String, nullable=True)
+    
+    # Relationships
+    workflow = relationship("ValidationWorkflow", back_populates="steps")
+    findings = relationship("ValidationStepFinding", back_populates="step", cascade="all, delete-orphan")
+
+class ValidationStepFinding(Base):
+    __tablename__ = "validation_step_findings"
+    
+    id = Column(String, primary_key=True, index=True)
+    step_id = Column(String, ForeignKey("validation_steps.id", ondelete="CASCADE"))
+    description = Column(Text)
+    severity = Column(Enum(ValidationSeverity))
+    code_location = Column(String, nullable=True)
+    recommendation = Column(Text, nullable=True)
+    
+    # Relationships
+    step = relationship("ValidationStep", back_populates="findings")
+
 class ValidationRequest(Base):
     __tablename__ = "validation_requests"
     

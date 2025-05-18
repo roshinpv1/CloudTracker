@@ -37,7 +37,14 @@ const LoginPage: React.FC = () => {
     <div className="min-h-screen flex items-center justify-center bg-gray-100 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full bg-white shadow-md rounded-lg p-8">
         <div className="text-center">
-          <h2 className="text-3xl font-extrabold text-gray-900">Cloud Tracker</h2>
+          <div className="flex justify-center mb-4">
+            <div className="flex items-center gap-2">
+              <div className="h-10 w-10 bg-primary rounded-sm flex items-center justify-center">
+                <span className="text-white font-bold text-xl">CT</span>
+              </div>
+              <span className="text-2xl font-semibold text-navy">CloudTracker</span>
+            </div>
+          </div>
           <p className="mt-2 text-sm text-gray-600">Sign in to your account</p>
         </div>
         

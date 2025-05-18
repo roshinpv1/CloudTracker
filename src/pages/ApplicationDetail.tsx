@@ -1,13 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Navigate, Link, useNavigate } from 'react-router-dom';
-import { CheckCircle2, AlertCircle, Clock3, Circle, PlusCircle, Save, Clipboard, ArrowLeft, Trash2, Play } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Clock3, Circle, PlusCircle, Save, Clipboard, ArrowLeft, Trash2, PlayCircle } from 'lucide-react';
 import ApplicationHeader from '../components/ApplicationHeader';
 import ChecklistTable from '../components/ChecklistTable';
+import ValidationWorkflowStatus from '../components/ValidationWorkflowStatus';
 import { Status, Application, ApplicationStatus } from '../types';
 import { useAuth, useAuthorization } from '../context/AuthContext';
 import { useNotification } from '../context/NotificationContext';
 import { getApplication, deleteApplication, updateApplication } from '../data/api';
-import { requestBatchValidation } from '../data/validationApi';
+import { requestAppValidation, getLatestAppValidation } from '../data/validationApi';
+
+// Separated component to handle validation section
+const ValidationContainer = ({ workflowId, showValidationDetails }: { workflowId: string | null, showValidationDetails: boolean }) => {
+  if (!showValidationDetails || !workflowId) {
+    return null;
+  }
+  
+  return <ValidationWorkflowStatus workflowId={workflowId} />;
+};
 
 const ApplicationDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -21,7 +31,10 @@ const ApplicationDetail: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isValidating, setIsValidating] = useState(false);
+  const [showValidationDetails, setShowValidationDetails] = useState(false);
+  const [workflowId, setWorkflowId] = useState<string | null>(null);
   
+  // Main application data loading effect
   useEffect(() => {
     const fetchApplication = async () => {
       if (!id) return;
@@ -32,12 +45,43 @@ const ApplicationDetail: React.FC = () => {
         const data = await getApplication(id);
         console.log('API response:', data);
         
+        // Map API field names to frontend field names
+        const normalizeItem = (item: any) => ({
+          ...item,
+          // Make sure all required fields exist
+          id: item.id || '',
+          description: item.description || '',
+          status: item.status || 'Not Started', 
+          lastUpdated: item.last_updated || item.lastUpdated || new Date().toISOString(),
+          categoryId: item.category_id || item.categoryId || '',
+          comments: item.comments || '',
+          evidence: item.evidence || ''
+        });
+        
+        // Create a completely normalized data structure to avoid any undefined properties
+        const normalizedCategories = (categories: any[] = []) => {
+          return categories.map((cat: any) => ({
+            id: cat.id || '',
+            name: cat.name || '',
+            category_type: cat.category_type || '',
+            // Ensure items is always an array
+            items: Array.isArray(cat.items) 
+              ? cat.items.map(normalizeItem) 
+              : []
+          }));
+        };
+        
         // Ensure applicationCategories and platformCategories exist with default empty arrays
         const normalizedData = {
           ...data,
-          applicationCategories: data.applicationCategories || data.application_categories || [],
-          platformCategories: data.platformCategories || data.platform_categories || []
+          applicationCategories: normalizedCategories(data.applicationCategories || []),
+          platformCategories: normalizedCategories(data.platformCategories || [])
         };
+        
+        // Debug the data structure
+        console.log('Normalized data:', normalizedData);
+        console.log('App categories:', normalizedData.applicationCategories);
+        console.log('Platform categories:', normalizedData.platformCategories);
         
         setApplication(normalizedData);
         setError(null);
@@ -52,6 +96,47 @@ const ApplicationDetail: React.FC = () => {
     
     fetchApplication();
   }, [id, addNotification]);
+  
+  // Load latest validation effect - always present, not conditional
+  useEffect(() => {
+    const loadLatestValidation = async () => {
+      if (!id || !application) return;
+      
+      try {
+        const latestValidation = await getLatestAppValidation(id);
+        if (latestValidation) {
+          setWorkflowId(latestValidation.id);
+        }
+      } catch (error) {
+        console.log('No previous validations found or error fetching validation:', error);
+        // Don't set any error state or show notifications for this expected 404
+        // Just ensure workflowId is null
+        setWorkflowId(null);
+      }
+    };
+    
+    loadLatestValidation();
+  }, [id, application]);
+  
+  // Debug logging effect - always present, not conditional
+  useEffect(() => {
+    if (application) {
+      console.log('App categories:', application.applicationCategories);
+      console.log('Platform categories:', application.platformCategories);
+      
+      if (application.applicationCategories) {
+        application.applicationCategories.forEach(category => {
+          console.log('App category:', category);
+        });
+      }
+      
+      if (application.platformCategories) {
+        application.platformCategories.forEach(category => {
+          console.log('Platform category:', category);
+        });
+      }
+    }
+  }, [application]);
   
   if (loading) {
     return (
@@ -170,53 +255,53 @@ const ApplicationDetail: React.FC = () => {
     }
   };
   
-  // Handle requesting validation for all requirements in the active tab
-  const handleRequestValidation = async () => {
-    if (!application) return;
-    
-    const targetCategories = activeTab === 'application' 
-      ? application.applicationCategories || [] 
-      : application.platformCategories || [];
-    
-    if (targetCategories.length === 0) {
-      addNotification('warning', 'No checklist items to validate');
-      return;
-    }
+  // Handle application validation
+  const handleValidateApplication = async () => {
+    if (!application || !id) return;
     
     setIsValidating(true);
     
     try {
-      // Collect all checklist item IDs from all categories
-      const allItemIds = targetCategories.flatMap(category => 
-        category.items ? category.items.map(item => item.id) : []
-      );
+      // Get application data with fallbacks for all fields
+      const repoUrl = application.repository_url || application.git_repo_link || '';
+      const jiraKey = application.jira_project_key || '';
+      const appdId = application.appdynamics_id || '';
       
-      if (allItemIds.length === 0) {
-        addNotification('warning', 'No checklist items to validate');
-        return;
-      }
-      
-      await requestBatchValidation({
-        checklist_item_ids: allItemIds,
-        validation_type: 'ai_assisted',
-        evidence_context: `Full ${activeTab} validation for ${application.name}`
+      // Request full application validation
+      const response = await requestAppValidation(id, {
+        validation_type: 'automated',
+        repository_url: repoUrl,
+        steps: [
+          'code_quality',
+          'security',
+          'app_requirements', 
+          'platform_requirements',
+          'external_integration'
+        ],
+        integrations: {
+          jira: { project_key: jiraKey || 'UNKNOWN' },
+          appdynamics: { application_id: appdId || 'UNKNOWN' },
+          grafana: { dashboard_id: application.grafana_dashboard_id || 'main-dashboard' },
+          splunk: { index: application.splunk_index || 'app-logs' }
+        }
       });
       
-      addNotification('success', `Validation requested for ${allItemIds.length} ${activeTab} requirements`);
-      
-      // Refresh application data to show updated status
-      if (id) {
-        const updatedApp = await getApplication(id);
-        setApplication(updatedApp);
+      if (response && response.validation_id) {
+        setWorkflowId(response.validation_id);
+        setShowValidationDetails(true);
+        addNotification('success', 'Application validation workflow initiated');
+      } else {
+        throw new Error('Invalid validation response');
       }
+      
     } catch (error) {
-      console.error(`Failed to request ${activeTab} validation:`, error);
-      addNotification('error', `Failed to request ${activeTab} validation`);
+      console.error('Failed to start validation workflow:', error);
+      addNotification('error', 'Failed to start validation workflow');
     } finally {
       setIsValidating(false);
     }
   };
-
+  
   return (
     <div className="pt-20 pb-6 bg-neutral-50 min-h-screen">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -228,6 +313,42 @@ const ApplicationDetail: React.FC = () => {
         </div>
         
         <ApplicationHeader application={application} />
+
+        {/* App validation status / action button */}
+        <div className="mt-6 flex items-center justify-between bg-white shadow-sm rounded-sm px-6 py-4 border border-neutral-200">
+          <div className="flex items-center space-x-2">
+            <h3 className="text-lg font-semibold text-gray-800">Application Validation</h3>
+            {workflowId && (
+              <button 
+                onClick={() => setShowValidationDetails(!showValidationDetails)}
+                className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+              >
+                {showValidationDetails ? 'Hide Details' : 'View Details'}
+              </button>
+            )}
+          </div>
+          
+          <button
+            onClick={handleValidateApplication}
+            disabled={isValidating}
+            className={`inline-flex items-center px-4 py-2 text-sm font-medium rounded-md shadow-sm ${
+              isValidating 
+                ? 'bg-gray-300 text-gray-700 cursor-not-allowed' 
+                : 'bg-primary text-white hover:bg-primary-dark'
+            }`}
+          >
+            <PlayCircle size={18} className="mr-2" />
+            {isValidating ? 'Validation in Progress...' : 'Validate Application'}
+          </button>
+        </div>
+        
+        {/* Validation workflow status */}
+        <div className="mt-4">
+          <ValidationContainer 
+            workflowId={workflowId} 
+            showValidationDetails={showValidationDetails} 
+          />
+        </div>
 
         <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-4">
           {/* Sidebar with stats */}
@@ -339,28 +460,11 @@ const ApplicationDetail: React.FC = () => {
                 >
                   Platform Requirements
                 </button>
-                
-                <div className="ml-auto flex items-center pr-4">
-                  {canEdit && (
-                    <button
-                      onClick={handleRequestValidation}
-                      disabled={isValidating}
-                      className={`inline-flex items-center px-4 py-2 border border-indigo-300 text-sm font-medium rounded-md text-indigo-700 bg-indigo-50 hover:bg-indigo-100 ${
-                        isValidating ? 'opacity-50 cursor-not-allowed' : ''
-                      }`}
-                    >
-                      <Play size={16} className="mr-2" />
-                      {isValidating 
-                        ? 'Processing...' 
-                        : `Validate All ${activeTab === 'application' ? 'Application' : 'Platform'} Requirements`}
-                    </button>
-                  )}
-                </div>
               </div>
 
               <div className="p-6">
                 {activeTab === 'application' ? (
-                  <>
+                  <div>
                     {appCategories.length > 0 ? (
                       appCategories.map(category => (
                         <ChecklistTable key={category.id} category={category} canEdit={canEdit} />
@@ -370,9 +474,9 @@ const ApplicationDetail: React.FC = () => {
                         No application categories found.
                       </div>
                     )}
-                  </>
+                  </div>
                 ) : (
-                  <>
+                  <div>
                     {platformCategories.length > 0 ? (
                       platformCategories.map(category => (
                         <ChecklistTable key={category.id} category={category} canEdit={canEdit} />
@@ -382,7 +486,7 @@ const ApplicationDetail: React.FC = () => {
                         No platform categories found.
                       </div>
                     )}
-                  </>
+                  </div>
                 )}
               </div>
             </div>
