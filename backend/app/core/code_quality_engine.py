@@ -1,11 +1,11 @@
 import os
 import re
-from utils.call_llm import call_llm
-from utils.validation_prompts import COMBINED_VALIDATION_PROMPT, LOGGING_VALIDATION_PROMPT, AVAILABILITY_VALIDATION_PROMPT, ERROR_HANDLING_VALIDATION_PROMPT
-from utils.parse_utils import parse_llm_response
+from .utils.call_llm import call_llm
+from .utils.validation_prompts import COMBINED_VALIDATION_PROMPT, LOGGING_VALIDATION_PROMPT, AVAILABILITY_VALIDATION_PROMPT, ERROR_HANDLING_VALIDATION_PROMPT
+from .utils.parse_utils import parse_llm_response
 from pocketflow import Node, Flow
 import uuid
-from utils.chromadb_storage import CodeQualityStorage
+from .utils.chromadb_storage import CodeQualityStorage
 
 
 class CodeQualityAnalyzer(Node):

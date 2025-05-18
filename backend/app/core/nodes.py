@@ -39,11 +39,23 @@ class FetchRepo(Node):
         include_patterns = shared["include_patterns"]
         exclude_patterns = shared["exclude_patterns"]
         max_file_size = shared["max_file_size"]
+        
+        # Check for authentication tokens
+        github_token = shared.get("github_token") or os.getenv("GITHUB_TOKEN")
+        git_auth_token = os.getenv("GIT_AUTH_TOKEN")
+        
+        # If we have an auth token but not a GitHub token, use it for authentication
+        token = github_token
+        if not token and git_auth_token and repo_url and "://" in repo_url and "@" not in repo_url:
+            # Format: https://hostname/path becomes https://token@hostname/path
+            protocol, rest = repo_url.split("://", 1)
+            repo_url = f"{protocol}://{git_auth_token}@{rest}"
+            print("Using Git authentication token for repository access")
 
         return {
             "repo_url": repo_url,
             "local_dir": local_dir,
-            "token": shared.get("github_token"),
+            "token": token,
             "include_patterns": include_patterns,
             "exclude_patterns": exclude_patterns,
             "max_file_size": max_file_size,

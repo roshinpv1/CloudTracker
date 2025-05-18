@@ -253,4 +253,145 @@ class BatchValidationResponse(BaseModel):
     validation_ids: List[str]
     status: ValidationStatus
     message: str
-    estimated_completion_time: Optional[datetime] = None 
+    estimated_completion_time: Optional[datetime] = None
+
+# Add the following schemas at the end of the file
+
+class LoggingAnalysisResult(BaseModel):
+    has_centralized_logging: bool = False
+    logging_frameworks: List[str] = []
+    has_sensitive_data_protection: bool = False
+    has_audit_trail_logging: bool = False
+    has_correlation_tracking_ids: bool = False
+    has_api_call_logging: bool = False
+    consistent_log_levels: bool = False
+    has_frontend_error_logging: bool = False
+    identified_issues: List[str] = []
+    recommendations: List[str] = []
+    detected_patterns: Dict[str, List[str]] = {}
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "has_centralized_logging": True,
+                "logging_frameworks": ["log4j", "slf4j"],
+                "has_sensitive_data_protection": True,
+                "has_audit_trail_logging": False,
+                "has_correlation_tracking_ids": True,
+                "has_api_call_logging": True,
+                "consistent_log_levels": True,
+                "has_frontend_error_logging": False,
+                "identified_issues": ["No audit trail logging found", "Potential PII in logs"],
+                "recommendations": ["Implement audit logging", "Add PII masking"],
+                "detected_patterns": {
+                    "logging_statements": ["Logger.info", "console.log"],
+                    "mask_patterns": ["maskPII", "maskCardNumber"]
+                }
+            }
+        }
+
+class AvailabilityAnalysisResult(BaseModel):
+    has_retry_logic: bool = False
+    has_high_availability_config: bool = False
+    has_timeout_settings: bool = False
+    has_auto_scaling: bool = False
+    has_throttling: bool = False
+    has_circuit_breakers: bool = False
+    identified_issues: List[str] = []
+    recommendations: List[str] = []
+    detected_patterns: Dict[str, List[str]] = {}
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "has_retry_logic": True,
+                "has_high_availability_config": False,
+                "has_timeout_settings": True,
+                "has_auto_scaling": False,
+                "has_throttling": True,
+                "has_circuit_breakers": True,
+                "identified_issues": ["No high availability config found"],
+                "recommendations": ["Implement Kubernetes readiness probes"],
+                "detected_patterns": {
+                    "retry_patterns": ["retryWhen", "maxRetries"],
+                    "timeout_patterns": ["connectionTimeout", "readTimeout"]
+                }
+            }
+        }
+
+class ErrorHandlingAnalysisResult(BaseModel):
+    has_backend_error_handling: bool = False
+    has_standard_http_codes: bool = False
+    has_client_error_handling: bool = False
+    has_error_documentation: bool = False
+    identified_issues: List[str] = []
+    recommendations: List[str] = []
+    detected_patterns: Dict[str, List[str]] = {}
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "has_backend_error_handling": True,
+                "has_standard_http_codes": True,
+                "has_client_error_handling": False,
+                "has_error_documentation": False,
+                "identified_issues": ["Client-side error handling missing"],
+                "recommendations": ["Implement error state management"],
+                "detected_patterns": {
+                    "error_handling": ["try/catch", "logger.error"],
+                    "http_codes": ["status(404)", "status(500)"]
+                }
+            }
+        }
+
+class CodeFileInfo(BaseModel):
+    path: str
+    language: str
+    size_bytes: int
+    is_test_file: bool = False
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "path": "src/main/java/com/example/Controller.java",
+                "language": "java",
+                "size_bytes": 5120,
+                "is_test_file": False
+            }
+        }
+
+class CodeQualityAnalysisResult(BaseModel):
+    """Schema for structured LLM code quality analysis results"""
+    repository_url: str
+    project_name: str
+    analysis_id: str = Field(default_factory=lambda: str(uuid4()))
+    analysis_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    
+    file_count: int
+    test_file_count: int
+    file_types: Dict[str, int] = {}
+    analyzed_files: List[CodeFileInfo] = []
+    
+    logging_analysis: LoggingAnalysisResult
+    availability_analysis: AvailabilityAnalysisResult
+    error_handling_analysis: ErrorHandlingAnalysisResult
+    
+    overall_quality_score: int = 0  # 0-100 score
+    summary: str = ""
+    executive_summary: str = ""
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "repository_url": "https://github.com/example/repo",
+                "project_name": "example-service",
+                "analysis_id": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+                "analysis_timestamp": "2023-08-15T14:30:00Z",
+                "file_count": 120,
+                "test_file_count": 35,
+                "file_types": {"java": 45, "xml": 12, "properties": 8},
+                "overall_quality_score": 78,
+                "summary": "The codebase demonstrates good practices in error handling...",
+                "executive_summary": "This application meets most quality requirements but needs improvements in..."
+            }
+        } 

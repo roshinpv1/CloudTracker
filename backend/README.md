@@ -9,6 +9,7 @@ This is the FastAPI backend for the CloudTracker application, a cloud applicatio
 - Checklist items management
 - Dashboard metrics and recent activities
 - Database seeding with initial data
+- Git repository validation with authentication support for private repositories
 
 ## Setup
 
@@ -25,7 +26,26 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-3. Run the server:
+3. Create a `.env` file in the backend directory with your environment variables:
+
+```
+# Database Configuration
+DATABASE_URL=sqlite:///./cloudtracker.db
+
+# Security Settings
+SECRET_KEY=your-secret-key
+ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=30
+
+# API Keys
+OPENAI_API_KEY=your-api-key-here
+
+# GitHub/Git Configuration
+GITHUB_TOKEN=your-github-token-here  # For GitHub repositories
+GIT_AUTH_TOKEN=your-git-auth-token-here  # For any Git repositories
+```
+
+4. Run the server:
 
 ```bash
 python run.py

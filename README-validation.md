@@ -1,15 +1,81 @@
 # CloudTracker Validation System
 
-This document describes the AI-powered validation system added to CloudTracker.
-
 ## Overview
 
-The validation system allows users to request automatic validation of checklist items using AI analysis of code snippets and evidence. It includes:
+The CloudTracker Validation System is a sophisticated workflow engine that provides automated and AI-assisted validation of cloud applications against established requirements checklists.
 
-1. Backend validation services using OpenAI
-2. Specialized validation prompts for different requirement types
-3. Frontend components for requesting and reviewing validations
-4. Database models to store validation results
+## Key Features
+
+- **Multiple Validation Types:**
+  - Manual: Human-verified validation
+  - Automated: System-verified using repository analysis
+  - AI-Assisted: LLM-based validation with evidence analysis
+
+- **Comprehensive Workflow:**
+  - Tracks status of validation steps
+  - Provides detailed findings and evidence
+  - Links validations to specific checklist items
+
+- **Repository Validation:**
+  - Analyzes Git repositories for compliance
+  - Supports private repositories with authentication tokens
+  - Evaluates code against security, logging, availability requirements
+
+## Environment Configuration
+
+To use the full features of the validation system, you'll need to configure the following environment variables in your backend's `.env` file:
+
+```
+# Authentication Tokens for Private Repositories
+GITHUB_TOKEN=your-github-token-here          # For GitHub repositories
+GIT_AUTH_TOKEN=your-git-auth-token-here      # For any Git repository
+```
+
+## How to Request Validation
+
+### Single Checklist Item Validation
+
+To validate a single checklist item:
+
+1. Navigate to the application detail page
+2. Click on a checklist item
+3. Click "Request Validation"
+4. Provide:
+   - Validation type (manual, automated, AI-assisted)
+   - Evidence context
+   - Provide a repository URL and commit ID
+   - Add code snippets if needed
+   - Specify additional context
+
+### Full Application Validation
+
+To validate an entire application across all requirements:
+
+1. Navigate to the application detail page
+2. Click "Validate Application"
+3. Provide:
+   - Repository URL (can be secured with GITHUB_TOKEN or GIT_AUTH_TOKEN)
+   - Optional commit ID
+   - Select which validation steps to run
+   - Configure integrations
+
+## Validation Results
+
+Validation results include:
+
+- Overall compliance status
+- Step-by-step validation results
+- Detailed findings with severity ratings
+- Evidence links to specific commits in code repositories
+- Recommendations for addressing non-compliant items
+
+## Implementation Details
+
+- Multistep workflow orchestration
+- Long-running asynchronous processing
+- Git repository analysis for code quality
+- LLM-based code evaluation for complex requirements
+- Evidence collection and storage
 
 ## Components
 

@@ -23,7 +23,9 @@ logger.setLevel(logging.INFO)
 # Initialize OpenAI client
 openai_api_key = os.getenv("OPENAI_API_KEY")
 if openai_api_key:
-    client = openai.OpenAI(api_key=openai_api_key)
+    # Using older openai API syntax
+    openai.api_key = openai_api_key
+    client = openai
 else:
     logger.warning("OPENAI_API_KEY not set. Validation service will not function properly.")
     client = None
@@ -203,7 +205,7 @@ class ValidationService:
         
         try:
             # Call OpenAI API with formatted prompt
-            response = client.chat.completions.create(
+            response = client.ChatCompletion.create(
                 model="gpt-4-turbo",  # Use appropriate model based on your needs
                 messages=[{"role": "user", "content": formatted_prompt}],
                 temperature=0.2,  # Lower temperature for more deterministic outputs
