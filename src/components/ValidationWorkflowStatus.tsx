@@ -248,10 +248,10 @@ const ValidationWorkflowStatus: React.FC<ValidationWorkflowStatusProps> = ({ wor
             )}
             
             {step.started_at && (
-              <div className="mt-2 text-xs text-gray-500 flex space-x-4">
-                <div>Started: {new Date(step.started_at).toLocaleString()}</div>
+              <div className="mt-2 text-xs text-gray-500">
+                Started: {new Date(step.started_at).toLocaleString()}
                 {step.completed_at && (
-                  <div>Completed: {new Date(step.completed_at).toLocaleString()}</div>
+                  <> • Completed: {new Date(step.completed_at).toLocaleString()}</>
                 )}
               </div>
             )}

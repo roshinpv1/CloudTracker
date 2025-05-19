@@ -63,6 +63,15 @@ export interface AppValidationRequest {
   steps?: string[];
   integrations?: Record<string, Record<string, any>>;
   additional_context?: Record<string, any>;
+  repository_analysis_config?: {
+    use_regex_validation?: boolean;
+    use_llm_analysis?: boolean;
+    use_git_auth?: boolean;
+    git_auth_methods?: string[];
+    max_file_size?: number;
+    include_patterns?: string[];
+    exclude_patterns?: string[];
+  };
 }
 
 export interface BatchValidationRequest {
@@ -195,7 +204,7 @@ export const getLatestAppValidation = async (appId: string): Promise<ValidationW
   }
 };
 
-// Get a validation workflow status
+// Get validation workflow status
 export const getValidationWorkflow = async (workflowId: string): Promise<ValidationWorkflowStatus> => {
   try {
     console.log(`Getting validation workflow ${workflowId}`);
@@ -208,11 +217,11 @@ export const getValidationWorkflow = async (workflowId: string): Promise<Validat
     checkResponseStatus(response);
     
     const data = await response.json();
-    console.log('Validation workflow status:', data);
+    console.log('Validation workflow response:', data);
     
     return data;
   } catch (error) {
-    console.error('Error getting validation workflow status:', error);
+    console.error('Error getting validation workflow:', error);
     handleAuthError(error);
     throw error;
   }

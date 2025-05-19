@@ -283,6 +283,15 @@ const ApplicationDetail: React.FC = () => {
           appdynamics: { application_id: appdId || 'UNKNOWN' },
           grafana: { dashboard_id: application.grafana_dashboard_id || 'main-dashboard' },
           splunk: { index: application.splunk_index || 'app-logs' }
+        },
+        repository_analysis_config: {
+          use_regex_validation: true,
+          use_llm_analysis: true,
+          use_git_auth: true,
+          git_auth_methods: ['token'],
+          max_file_size: 500000, // 500KB
+          include_patterns: ['*.java', '*.py', '*.js', '*.ts', '*.tsx', '*.jsx', '*.go', '*.rb', '*.php'],
+          exclude_patterns: ['*.min.js', '*.min.css', '*.bundle.js', '*.bundle.css', 'node_modules/**', 'dist/**', 'build/**']
         }
       });
       

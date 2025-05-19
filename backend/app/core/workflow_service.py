@@ -2,7 +2,7 @@ import json
 import os
 import logging
 from logging.handlers import RotatingFileHandler
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from uuid import uuid4
 import uuid
 from datetime import datetime
@@ -13,13 +13,14 @@ from sqlalchemy.orm import Session, joinedload
 import re
 import tempfile
 import subprocess
+import fnmatch
 
-from ..models.validation import (
+from app.models.validation import (
     ValidationWorkflow, ValidationStep, ValidationStepFinding,
     ValidationStatus, ValidationStepStatus, ValidationStepType, ValidationSeverity
 )
-from ..models.models import Application, ChecklistItem, Category
-from ..schemas.validation import AppValidationRequest
+from app.models.models import Application, ChecklistItem, Category
+from app.schemas.validation import AppValidationRequest, RepositoryAnalysisConfig
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -146,7 +147,7 @@ class WorkflowService:
     async def run_validation_workflow(
         db_session: Session,
         workflow_id: str,
-        application: Application,
+        application_id: str,
         validation_request: AppValidationRequest
     ) -> None:
         """
@@ -155,16 +156,21 @@ class WorkflowService:
         Args:
             db_session: Database session
             workflow_id: ID of the workflow
-            application: The application being validated
+            application_id: ID of the application being validated
             validation_request: The validation request data
         """
-        # Update workflow status to in progress
+        # Get the application with its categories
+        application = db_session.query(Application).filter(Application.id == application_id).first()
+        if not application:
+            logger.error(f"Workflow {workflow_id}: Application {application_id} not found")
+            return
+        
+        logger.info(f"Starting validation workflow {workflow_id} for application {application.id} ({application.name})")
         workflow = db_session.query(ValidationWorkflow).filter(ValidationWorkflow.id == workflow_id).first()
         if not workflow:
             logger.error(f"Workflow {workflow_id} not found")
             return
         
-        logger.info(f"Starting validation workflow {workflow_id} for application {application.id} ({application.name})")
         workflow.status = ValidationStatus.IN_PROGRESS
         db_session.commit()
         
@@ -214,7 +220,8 @@ class WorkflowService:
                             step_id=step_model.id,
                             app_id=application.id,
                             app_name=application.name,
-                            repository_url=validation_request.repository_url or ""
+                            repository_url=validation_request.repository_url or "",
+                            validation_request=validation_request
                         )
                     elif step_type == ValidationStepType.PLATFORM_REQUIREMENTS:
                         logger.info(f"Workflow {workflow_id}: Validating platform requirements for {application.name}")
@@ -309,7 +316,7 @@ class WorkflowService:
         """
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
-        from ..db.database import SQLALCHEMY_DATABASE_URL
+        from app.db.database import SQLALCHEMY_DATABASE_URL
         
         # Create a new database session for this async function
         engine = create_engine(SQLALCHEMY_DATABASE_URL)
@@ -411,7 +418,7 @@ class WorkflowService:
         """
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
-        from ..db.database import SQLALCHEMY_DATABASE_URL
+        from app.db.database import SQLALCHEMY_DATABASE_URL
         
         # Create a new database session for this async function
         engine = create_engine(SQLALCHEMY_DATABASE_URL)
@@ -499,27 +506,25 @@ class WorkflowService:
         step_id: str,
         app_id: str,
         app_name: str,
-        repository_url: str
+        repository_url: str,
+        validation_request: Optional[AppValidationRequest] = None
     ) -> Dict[str, Any]:
         """
-        Validate application-specific requirements
+        Validate application requirements against the codebase
         
         Args:
-            step_id: Database ID of the step
-            app_id: Application ID
-            app_name: Application name
-            repository_url: Git repository URL
+            step_id: ID of the validation step
+            app_id: ID of the application
+            app_name: Name of the application
+            repository_url: URL of the repository to analyze
+            validation_request: Optional validation request containing configuration
             
         Returns:
-            Dict with the results of the validation
+            Dictionary containing validation results
         """
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
-        from ..db.database import SQLALCHEMY_DATABASE_URL
-        
-        # Generate a unique validation ID for logging
-        validation_id = str(uuid.uuid4())[:8]
-        logger.info(f"[Validation {validation_id}] Starting app requirements validation for {app_name} (ID: {app_id})")
+        from app.db.database import SQLALCHEMY_DATABASE_URL
         
         # Create a new database session for this async function
         engine = create_engine(SQLALCHEMY_DATABASE_URL)
@@ -530,22 +535,22 @@ class WorkflowService:
             # Update step status to running
             step = db.query(ValidationStep).filter(ValidationStep.id == step_id).first()
             if not step:
-                logger.error(f"[Validation {validation_id}] Step {step_id} not found")
+                logger.error(f"[Validation {step_id}] Step {step_id} not found")
                 return {"success": False, "message": f"Step {step_id} not found"}
             
-            logger.info(f"[Validation {validation_id}] Updating step status to RUNNING")
+            logger.info(f"[Validation {step_id}] Updating step status to RUNNING")
             step.status = ValidationStepStatus.RUNNING
             step.started_at = datetime.utcnow()
             db.commit()
             
             # Get the application with its categories
-            logger.info(f"[Validation {validation_id}] Retrieving application categories and checklist items")
+            logger.info(f"[Validation {step_id}] Retrieving application categories and checklist items")
             application = db.query(Application).options(
                 joinedload(Application.application_categories).joinedload(Category.checklist_items)
             ).filter(Application.id == app_id).first()
             
             if not application:
-                logger.error(f"[Validation {validation_id}] Application {app_id} not found")
+                logger.error(f"[Validation {step_id}] Application {app_id} not found")
                 return {"success": False, "message": f"Application {app_id} not found"}
                 
             # Collect all checklist items from application categories
@@ -554,25 +559,28 @@ class WorkflowService:
                 for item in category.checklist_items:
                     checklist_items.append(item)
             
-            logger.info(f"[Validation {validation_id}] Found {len(checklist_items)} checklist items from {len(application.application_categories)} application categories")
+            logger.info(f"[Validation {step_id}] Found {len(checklist_items)} checklist items from {len(application.application_categories)} application categories")
             
             # If repository URL is provided, clone or analyze the repository for validation
             repo_analysis_results = {}
             if repository_url:
-                logger.info(f"[Validation {validation_id}] Analyzing repository: {repository_url}")
-                # In production, you would use Git tools or APIs to analyze the repository
-                # For this implementation, we'll simulate repository analysis with more sophisticated logic
-                repo_analysis_results = await WorkflowService._analyze_repository(repository_url)
-                logger.info(f"[Validation {validation_id}] Repository analysis completed with {len(repo_analysis_results)} results")
+                logger.info(f"[Validation {step_id}] Analyzing repository: {repository_url}")
+                # Get repository analysis config from validation request if available
+                repo_config = validation_request.repository_analysis_config if validation_request else None
+                repo_analysis_results = await WorkflowService._analyze_repository(
+                    repository_url,
+                    config=repo_config
+                )
+                logger.info(f"[Validation {step_id}] Repository analysis completed with {len(repo_analysis_results)} results")
             else:
-                logger.warning(f"[Validation {validation_id}] No repository URL provided for application {app_id}, validation will be limited")
+                logger.warning(f"[Validation {step_id}] No repository URL provided for application {app_id}, validation will be limited")
             
             total_items = len(checklist_items)
             passed_items = 0
             failed_items = 0
             
             # Validation rule mapping - maps requirement descriptions to validation functions
-            logger.info(f"[Validation {validation_id}] Setting up validation rules for requirements")
+            logger.info(f"[Validation {step_id}] Setting up validation rules for requirements")
             validation_rules = {
                 "Logs are searchable and available": WorkflowService._validate_logs_searchable,
                 "Avoid logging confidential data": WorkflowService._validate_no_confidential_logging,
@@ -593,9 +601,9 @@ class WorkflowService:
             }
             
             # Go through each checklist item and apply appropriate validation rule
-            logger.info(f"[Validation {validation_id}] Starting validation of {total_items} checklist items")
+            logger.info(f"[Validation {step_id}] Starting validation of {total_items} checklist items")
             for i, item in enumerate(checklist_items):
-                logger.debug(f"[Validation {validation_id}] Processing item {i+1}/{total_items}: {item.description}")
+                logger.debug(f"[Validation {step_id}] Processing item {i+1}/{total_items}: {item.description}")
                 validation_result = {
                     "validated": False,
                     "reason": "No matching validation rule found"
@@ -604,20 +612,20 @@ class WorkflowService:
                 # Find and apply the matching validation rule
                 if item.description in validation_rules:
                     validation_func = validation_rules[item.description]
-                    logger.debug(f"[Validation {validation_id}] Applying validation rule for: {item.description}")
+                    logger.debug(f"[Validation {step_id}] Applying validation rule for: {item.description}")
                     validation_result = validation_func(repo_analysis_results, application)
                 else:
-                    logger.warning(f"[Validation {validation_id}] No validation rule found for: {item.description}")
+                    logger.warning(f"[Validation {step_id}] No validation rule found for: {item.description}")
                 
                 if validation_result["validated"]:
                     passed_items += 1
-                    logger.debug(f"[Validation {validation_id}] Item PASSED: {item.description}")
+                    logger.debug(f"[Validation {step_id}] Item PASSED: {item.description}")
                     item.status = "Verified"
                     item.evidence = repository_url
                     item.comments = f"Automatically verified: {validation_result.get('details', '')}"
                 else:
                     failed_items += 1
-                    logger.debug(f"[Validation {validation_id}] Item FAILED: {item.description} - {validation_result.get('reason', 'Unknown reason')}")
+                    logger.debug(f"[Validation {step_id}] Item FAILED: {item.description} - {validation_result.get('reason', 'Unknown reason')}")
                     # Create a finding for the failed item
                     finding = ValidationStepFinding(
                         id=str(uuid4()),
@@ -631,10 +639,10 @@ class WorkflowService:
             
             # Calculate compliance percentage
             compliance_percentage = (passed_items / total_items * 100) if total_items > 0 else 0
-            logger.info(f"[Validation {validation_id}] Validation results: {passed_items}/{total_items} passed ({compliance_percentage:.1f}%)")
+            logger.info(f"[Validation {step_id}] Validation results: {passed_items}/{total_items} passed ({compliance_percentage:.1f}%)")
             
             # Update step status to completed
-            logger.info(f"[Validation {validation_id}] Updating step status to COMPLETED")
+            logger.info(f"[Validation {step_id}] Updating step status to COMPLETED")
             step.status = ValidationStepStatus.COMPLETED
             step.completed_at = datetime.utcnow()
             step.result_summary = f"Application requirements validation completed: {passed_items}/{total_items} passed ({compliance_percentage:.1f}%)"
@@ -647,7 +655,7 @@ class WorkflowService:
             }
             db.commit()
             
-            logger.info(f"[Validation {validation_id}] App requirements validation completed for {app_name}")
+            logger.info(f"[Validation {step_id}] App requirements validation completed for {app_name}")
             return {
                 "success": True,
                 "details": {
@@ -660,7 +668,7 @@ class WorkflowService:
             }
             
         except Exception as e:
-            logger.error(f"[Validation {validation_id}] Error in application requirements validation: {str(e)}", exc_info=True)
+            logger.error(f"[Validation {step_id}] Error in application requirements validation: {str(e)}", exc_info=True)
             
             # Update step status to failed
             if 'step' in locals():
@@ -673,21 +681,30 @@ class WorkflowService:
             
         finally:
             db.close()
-            logger.info(f"[Validation {validation_id}] Closed database connection")
+            logger.info(f"[Validation {step_id}] Closed database connection")
     
     @staticmethod
-    async def _analyze_repository(repository_url: str) -> Dict[str, Any]:
+    async def _analyze_repository(
+        repository_url: str,
+        config: Optional[RepositoryAnalysisConfig] = None
+    ) -> Dict[str, Any]:
         """
         Analyze a Git repository for validation purposes using the existing code_quality_engine
         
         Args:
             repository_url: URL of the Git repository
+            config: Optional configuration for repository analysis
             
         Returns:
             Dictionary containing analysis results or error information
         """
         analysis_id = str(uuid.uuid4())[:8]  # Generate a short ID for this analysis
         logger.info(f"[Analysis {analysis_id}] Starting repository analysis for {repository_url}")
+        
+        # Use default config if none provided
+        if config is None:
+            config = RepositoryAnalysisConfig()
+        
         try:
             # Attempt to import code_quality_engine - this might fail if dependencies are missing
             try:
@@ -703,22 +720,21 @@ class WorkflowService:
             
             logger.info(f"[Analysis {analysis_id}] Analyzing repository: {repository_url}")
             
-            # Check if we need to use an authentication token
-            git_auth_token = os.getenv("GIT_AUTH_TOKEN")
-            
-            # If we have a token and the URL doesn't already include authentication
-            if git_auth_token and "://" in repository_url and "@" not in repository_url:
-                # Format: https://hostname/path becomes https://token@hostname/path
-                protocol, rest = repository_url.split("://", 1)
-                repository_url = f"{protocol}://{git_auth_token}@{rest}"
-                logger.info(f"[Analysis {analysis_id}] Using GIT_AUTH_TOKEN for repository access")
-            
-            # Alternatively, if GITHUB_TOKEN is set, we could use it for GitHub repositories
-            github_token = os.getenv("GITHUB_TOKEN")
-            if github_token and not git_auth_token and "github.com" in repository_url and "@" not in repository_url:
-                protocol, rest = repository_url.split("://", 1)
-                repository_url = f"{protocol}://{github_token}@{rest}"
-                logger.info(f"[Analysis {analysis_id}] Using GITHUB_TOKEN for repository access")
+            # Handle Git authentication based on config
+            if config.use_git_auth:
+                # Check for GitHub token
+                github_token = os.getenv("GITHUB_TOKEN")
+                if github_token and "github.com" in repository_url and "@" not in repository_url:
+                    protocol, rest = repository_url.split("://", 1)
+                    repository_url = f"{protocol}://{github_token}@{rest}"
+                    logger.info(f"[Analysis {analysis_id}] Using GITHUB_TOKEN for repository access")
+                
+                # Check for generic Git token
+                git_auth_token = os.getenv("GIT_AUTH_TOKEN")
+                if git_auth_token and "://" in repository_url and "@" not in repository_url:
+                    protocol, rest = repository_url.split("://", 1)
+                    repository_url = f"{protocol}://{git_auth_token}@{rest}"
+                    logger.info(f"[Analysis {analysis_id}] Using GIT_AUTH_TOKEN for repository access")
             
             # Create a temporary directory for cloning the repository
             logger.info(f"[Analysis {analysis_id}] Creating temporary directory for repository")
@@ -761,19 +777,22 @@ class WorkflowService:
                 for root, _, files in os.walk(temp_dir):
                     for file in files:
                         file_count += 1
-                        # Skip binary files, images, etc.
-                        if file.endswith(('.jpg', '.png', '.gif', '.pdf', '.jar', '.class', '.pyc', '.exe')):
-                            skipped_count += 1
-                            continue
-                        
                         file_path = os.path.join(root, file)
                         rel_path = os.path.relpath(file_path, temp_dir)
+                        
+                        # Check if file matches include/exclude patterns
+                        if not any(fnmatch.fnmatch(file, pattern) for pattern in config.include_patterns):
+                            skipped_count += 1
+                            continue
+                        if any(fnmatch.fnmatch(file, pattern) for pattern in config.exclude_patterns):
+                            skipped_count += 1
+                            continue
                         
                         try:
                             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                                 content = f.read()
                                 # Only include text files with reasonable size
-                                if len(content) < 1000000:  # Skip files > 1MB
+                                if len(content) < config.max_file_size:
                                     files_data.append((rel_path, content))
                                 else:
                                     skipped_count += 1
@@ -784,10 +803,24 @@ class WorkflowService:
                 
                 logger.info(f"[Analysis {analysis_id}] Found {file_count} files, processed {len(files_data)}, skipped {skipped_count}")
                 
-                # Skip CodeQualityAnalyzer usage if not available
-                if not code_quality_available:
-                    logger.warning(f"[Analysis {analysis_id}] Skipping code quality analysis as dependencies are not available")
-                    return WorkflowService._simulate_repository_analysis()
+                # Perform regex-based validation if enabled
+                if config.use_regex_validation:
+                    logger.info(f"[Analysis {analysis_id}] Performing regex-based validation")
+                    regex_results = WorkflowService._analyze_repository_with_regex(
+                        files_data,
+                        patterns=config.regex_patterns,
+                        min_matches=config.min_pattern_matches,
+                        analysis_id=analysis_id
+                    )
+                    
+                    # If LLM analysis is disabled, return regex results
+                    if not config.use_llm_analysis:
+                        return regex_results
+                
+                # Skip CodeQualityAnalyzer usage if not available or disabled
+                if not code_quality_available or not config.use_llm_analysis:
+                    logger.warning(f"[Analysis {analysis_id}] Skipping code quality analysis as dependencies are not available or disabled")
+                    return regex_results if config.use_regex_validation else WorkflowService._simulate_repository_analysis()
                 
                 # Create a shared context dictionary for the code quality analyzer
                 logger.info(f"[Analysis {analysis_id}] Preparing code quality analysis")
@@ -820,14 +853,21 @@ class WorkflowService:
                     logger.info(f"[Analysis {analysis_id}] Analysis report saved to {report_path}")
                     
                     # Convert the report to structured data
-                    return WorkflowService._parse_llm_analysis_report(analysis_report, files_data, analysis_id)
+                    llm_results = WorkflowService._parse_llm_analysis_report(analysis_report, files_data, analysis_id)
+                    
+                    # Merge regex results with LLM results if regex validation was performed
+                    if config.use_regex_validation:
+                        llm_results.update(regex_results)
+                    
+                    return llm_results
                     
                 except Exception as e:
                     logger.error(f"[Analysis {analysis_id}] Error running LLM analysis: {str(e)}", exc_info=True)
                     logger.warning(f"[Analysis {analysis_id}] Falling back to regex-based analysis due to LLM error")
                     # Fall back to regex-based analysis if LLM analysis fails
-                    context = prep_res["context"]
-                    return WorkflowService._analyze_repository_with_regex(files_data, context, analysis_id)
+                    if config.use_regex_validation:
+                        return regex_results
+                    return WorkflowService._simulate_repository_analysis()
                 
         except ImportError as e:
             logger.error(f"[Analysis {analysis_id}] Failed to import code_quality_engine components: {str(e)}")
@@ -837,7 +877,7 @@ class WorkflowService:
             logger.error(f"[Analysis {analysis_id}] Error analyzing repository: {str(e)}", exc_info=True)
             # Fall back to simulated analysis on any error
             return WorkflowService._simulate_repository_analysis()
-            
+    
     @staticmethod
     def _parse_llm_analysis_report(report: str, files_data: list, analysis_id: str) -> Dict[str, Any]:
         """
@@ -1286,7 +1326,7 @@ class WorkflowService:
         """
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
-        from ..db.database import SQLALCHEMY_DATABASE_URL
+        from app.db.database import SQLALCHEMY_DATABASE_URL
         
         # Create a new database session for this async function
         engine = create_engine(SQLALCHEMY_DATABASE_URL)
@@ -1418,7 +1458,7 @@ class WorkflowService:
         """
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
-        from ..db.database import SQLALCHEMY_DATABASE_URL
+        from app.db.database import SQLALCHEMY_DATABASE_URL
         
         # Create a new database session for this async function
         engine = create_engine(SQLALCHEMY_DATABASE_URL)
@@ -1612,118 +1652,129 @@ class WorkflowService:
         logger.info(f"Updated checklist items for application {app_id} based on validation results")
     
     @staticmethod
-    def _analyze_repository_with_regex(files_data, context=None, analysis_id=None) -> Dict[str, Any]:
+    def _analyze_repository_with_regex(
+        files_data: List[Tuple[str, str]],
+        patterns: Optional[Dict[str, List[str]]] = None,
+        min_matches: Optional[Dict[str, int]] = None,
+        analysis_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Analyze repository files using regex patterns
-        This is a fallback method used only when LLM analysis fails
+        
+        Args:
+            files_data: List of tuples containing (file_path, content)
+            patterns: Dictionary of category to regex patterns
+            min_matches: Dictionary of category to minimum required matches
+            analysis_id: Optional analysis ID for logging
+            
+        Returns:
+            Dictionary containing analysis results
         """
         if analysis_id is None:
             analysis_id = str(uuid.uuid4())[:8]  # Generate a short ID for this analysis
             
-        logger.info(f"[Analysis {analysis_id}] Starting regex-based repository analysis on {len(files_data)} files (FALLBACK MODE)")
+        logger.info(f"[Analysis {analysis_id}] Starting regex-based repository analysis on {len(files_data)} files")
         
-        # If context is not provided, create it by joining all file content
-        if context is None:
-            logger.info(f"[Analysis {analysis_id}] Building context from {len(files_data)} files")
-            context = "\n\n".join([content for _, content in files_data])
-            logger.info(f"[Analysis {analysis_id}] Built context with {len(context)} characters")
+        # Use default patterns if none provided
+        if patterns is None:
+            patterns = RepositoryAnalysisConfig().regex_patterns
         
-        # Common patterns to search for
-        logger.info(f"[Analysis {analysis_id}] Setting up pattern matching rules")
-        patterns = {
-            "has_logging_framework": [r'import\s+log4j', r'import\s+slf4j', r'import\s+winston', r'import\s+bunyan', r'logging\.', r'logger\.'],
-            "has_log_search_integration": [r'splunk', r'elasticsearch', r'kibana', r'datadog', r'logstash'],
-            "has_confidential_data_logging": [r'password.*log', r'secret.*log', r'token.*log', r'credentials.*log'],
-            "has_audit_logs": [r'audit.*log', r'createAudit', r'logAudit', r'AuditLogger'],
-            "has_trace_id": [r'traceId', r'correlationId', r'requestId', r'transaction[_-]?id'],
-            "has_api_call_logging": [r'log.*request', r'log.*response', r'ApiLogger', r'RestLogger'],
-            "has_ui_error_logging": [r'console\.error', r'Sentry', r'captureException', r'reportError'],
-            "has_retry_logic": [r'retry', r'retryWhen', r'maxRetries', r'backoff', r'attempt < maxAttempts'],
-            "has_io_timeouts": [r'timeout', r'timeoutMs', r'connectionTimeout', r'readTimeout'],
-            "has_auto_scaling_config": [r'autoscale', r'HorizontalPodAutoscaler', r'AutoScalingGroup', r'scaling\.'],
-            "has_throttling": [r'throttle', r'rateLimit', r'rateLimiter', r'limit\s+requests'],
-            "has_circuit_breaker": [r'circuitBreaker', r'hystrix', r'resilience4j', r'failsafe'],
-            "has_system_error_logging": [r'log.*error', r'logger\.error', r'logError', r'catch.*log'],
-            "has_standard_http_codes": [r'status\(4[0-9]{2}\)', r'status\(5[0-9]{2}\)', r'HttpStatus\.', r'StatusCode\.'],
-            "has_client_error_tracking": [r'exception.*track', r'error.*track', r'reportError', r'sendError'],
-            "has_automated_tests": [r'@Test', r'describe\(', r'it\(', r'test\(', r'assert', r'expect\(']
+        # Use default minimum matches if none provided
+        if min_matches is None:
+            min_matches = RepositoryAnalysisConfig().min_pattern_matches
+        
+        # Initialize results
+        analysis_results = {
+            "has_logging_framework": False,
+            "has_log_search_integration": False,
+            "has_confidential_data_logging": False,
+            "has_audit_logs": False,
+            "has_trace_id": False,
+            "has_api_call_logging": False,
+            "has_ui_error_logging": False,
+            "has_retry_logic": False,
+            "has_io_timeouts": False,
+            "has_auto_scaling_config": False,
+            "has_throttling": False,
+            "has_circuit_breaker": False,
+            "has_system_error_logging": False,
+            "has_standard_http_codes": False,
+            "has_client_error_tracking": False,
+            "has_automated_tests": False,
+            "patterns_found": {},
+            "file_types": {},
+            "test_coverage": 0
         }
         
-        # Execute the pattern analysis
-        logger.info(f"[Analysis {analysis_id}] Executing pattern analysis")
-        analysis_results = {}
-        pattern_matches = 0
+        # Track pattern matches per category
+        category_matches = {category: 0 for category in patterns.keys()}
         
-        for key, pattern_list in patterns.items():
-            found = False
-            for pattern in pattern_list:
-                if re.search(pattern, context, re.IGNORECASE):
-                    found = True
-                    pattern_matches += 1
-                    break
-            analysis_results[key] = found
+        # Analyze each file
+        for file_path, content in files_data:
+            # Track file types
+            ext = os.path.splitext(file_path)[1].lower()
+            analysis_results["file_types"][ext] = analysis_results["file_types"].get(ext, 0) + 1
             
-        logger.info(f"[Analysis {analysis_id}] Found {pattern_matches} pattern matches across {len(patterns)} categories")
+            # Check each category's patterns
+            for category, category_patterns in patterns.items():
+                for pattern in category_patterns:
+                    try:
+                        matches = re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE)
+                        for match in matches:
+                            category_matches[category] += 1
+                            
+                            # Update specific flags based on matches
+                            if category == "logging":
+                                if "log4j" in pattern or "slf4j" in pattern or "winston" in pattern or "bunyan" in pattern:
+                                    analysis_results["has_logging_framework"] = True
+                                if "splunk" in pattern or "elasticsearch" in pattern or "kibana" in pattern:
+                                    analysis_results["has_log_search_integration"] = True
+                                if "audit" in pattern:
+                                    analysis_results["has_audit_logs"] = True
+                                if "api" in pattern or "rest" in pattern:
+                                    analysis_results["has_api_call_logging"] = True
+                                if "error" in pattern:
+                                    analysis_results["has_system_error_logging"] = True
+                            
+                            elif category == "security":
+                                if "password" in pattern or "secret" in pattern or "token" in pattern:
+                                    analysis_results["has_confidential_data_logging"] = True
+                            
+                            elif category == "availability":
+                                if "retry" in pattern:
+                                    analysis_results["has_retry_logic"] = True
+                                if "timeout" in pattern:
+                                    analysis_results["has_io_timeouts"] = True
+                                if "autoscale" in pattern:
+                                    analysis_results["has_auto_scaling_config"] = True
+                                if "throttle" in pattern or "rate" in pattern:
+                                    analysis_results["has_throttling"] = True
+                                if "circuit" in pattern or "hystrix" in pattern:
+                                    analysis_results["has_circuit_breaker"] = True
+                            
+                            elif category == "error_handling":
+                                if "trace" in pattern or "correlation" in pattern:
+                                    analysis_results["has_trace_id"] = True
+                                if "console.error" in pattern or "Sentry" in pattern:
+                                    analysis_results["has_ui_error_logging"] = True
+                                if "status" in pattern and ("4" in pattern or "5" in pattern):
+                                    analysis_results["has_standard_http_codes"] = True
+                                if "error.*track" in pattern or "reportError" in pattern:
+                                    analysis_results["has_client_error_tracking"] = True
+                    except Exception as e:
+                        logger.warning(f"[Analysis {analysis_id}] Error processing pattern {pattern} in {file_path}: {str(e)}")
         
-        # Count pattern occurrences for more detailed analysis
-        logger.info(f"[Analysis {analysis_id}] Counting detailed pattern occurrences")
-        pattern_counts = {}
-        for category, pattern_list in {
-            "logging_patterns": patterns["has_logging_framework"],
-            "confidential_data_patterns": patterns["has_confidential_data_logging"],
-            "audit_patterns": patterns["has_audit_logs"],
-            "trace_id_patterns": patterns["has_trace_id"],
-            "retry_patterns": patterns["has_retry_logic"],
-            "timeout_patterns": patterns["has_io_timeouts"],
-            "circuit_breaker_patterns": patterns["has_circuit_breaker"]
-        }.items():
-            count = 0
-            for pattern in pattern_list:
-                count += len(re.findall(pattern, context, re.IGNORECASE))
-            pattern_counts[category] = count
+        # Update pattern counts in results
+        analysis_results["patterns_found"] = category_matches
         
-        # Add detailed information to the results
-        analysis_results["patterns_found"] = pattern_counts
-        
-        # Count file types in repository
-        logger.info(f"[Analysis {analysis_id}] Analyzing file types distribution")
-        file_types = {}
-        for path, _ in files_data:
-            ext = os.path.splitext(path)[1].lower()[1:]  # Get extension without dot
-            if ext:
-                file_types[ext] = file_types.get(ext, 0) + 1
-        
-        analysis_results["file_types"] = file_types
-        logger.info(f"[Analysis {analysis_id}] Found {len(file_types)} unique file extensions")
-        
-        # Detect logging frameworks used
-        logger.info(f"[Analysis {analysis_id}] Detecting logging frameworks")
-        frameworks = []
-        if re.search(r'import\s+log4j', context, re.IGNORECASE):
-            frameworks.append("log4j")
-        if re.search(r'import\s+slf4j', context, re.IGNORECASE):
-            frameworks.append("slf4j")
-        if re.search(r'winston', context, re.IGNORECASE):
-            frameworks.append("winston")
-        if re.search(r'bunyan', context, re.IGNORECASE):
-            frameworks.append("bunyan")
-        if re.search(r'java\.util\.logging', context, re.IGNORECASE):
-            frameworks.append("java.util.logging")
-        
-        analysis_results["logging_frameworks"] = frameworks
-        logger.info(f"[Analysis {analysis_id}] Detected {len(frameworks)} logging frameworks: {', '.join(frameworks) if frameworks else 'none'}")
-        
-        # Determine test coverage (simulated based on test file count)
-        logger.info(f"[Analysis {analysis_id}] Analyzing test coverage")
+        # Determine test coverage based on test file count
         test_files = len([f for f, _ in files_data if 'test' in f.lower() or 'spec' in f.lower()])
         total_files = len(files_data)
         if total_files > 0:
-            test_coverage = min(100, int((test_files / total_files) * 100))
-        else:
-            test_coverage = 0
+            analysis_results["test_coverage"] = min(100, int((test_files / total_files) * 100))
         
-        analysis_results["test_coverage"] = test_coverage
-        logger.info(f"[Analysis {analysis_id}] Estimated test coverage: {test_coverage}% ({test_files} test files out of {total_files} total)")
+        # Set has_automated_tests based on test coverage
+        analysis_results["has_automated_tests"] = analysis_results["test_coverage"] > 0
         
-        logger.info(f"[Analysis {analysis_id}] Repository analysis completed with {len(files_data)} files analyzed (FALLBACK MODE)")
+        logger.info(f"[Analysis {analysis_id}] Regex analysis completed with {len(files_data)} files analyzed")
         return analysis_results 

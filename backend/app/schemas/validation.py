@@ -46,6 +46,76 @@ class ValidationStepStatus(str, Enum):
     FAILED = "failed"
     SKIPPED = "skipped"
 
+# Repository Analysis Configuration
+class RepositoryAnalysisConfig(BaseModel):
+    """Configuration for repository analysis"""
+    use_regex_validation: bool = True
+    regex_patterns: Dict[str, List[str]] = Field(
+        default_factory=lambda: {
+            "logging": [
+                r'import\s+log4j', r'import\s+slf4j', r'import\s+winston', r'import\s+bunyan',
+                r'logging\.', r'logger\.'
+            ],
+            "security": [
+                r'password.*log', r'secret.*log', r'token.*log', r'credentials.*log',
+                r'encrypt', r'decrypt', r'hash'
+            ],
+            "availability": [
+                r'retry', r'retryWhen', r'maxRetries', r'backoff',
+                r'timeout', r'timeoutMs', r'connectionTimeout',
+                r'autoscale', r'HorizontalPodAutoscaler',
+                r'throttle', r'rateLimit', r'rateLimiter',
+                r'circuitBreaker', r'hystrix', r'resilience4j'
+            ],
+            "error_handling": [
+                r'try\s*{', r'catch\s*{', r'finally\s*{',
+                r'throw\s+new\s+Error', r'throw\s+new\s+Exception',
+                r'logger\.error', r'console\.error'
+            ]
+        }
+    )
+    min_pattern_matches: Dict[str, int] = Field(
+        default_factory=lambda: {
+            "logging": 5,
+            "security": 3,
+            "availability": 4,
+            "error_handling": 5
+        }
+    )
+    use_llm_analysis: bool = True
+    use_git_auth: bool = True
+    git_auth_methods: List[str] = Field(
+        default_factory=lambda: ["token", "ssh", "basic"]
+    )
+    max_file_size: int = 1000000  # 1MB
+    include_patterns: List[str] = Field(
+        default_factory=lambda: ["*.java", "*.py", "*.js", "*.ts", "*.go", "*.rb"]
+    )
+    exclude_patterns: List[str] = Field(
+        default_factory=lambda: ["*.min.js", "*.min.css", "*.map", "*.lock"]
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "use_regex_validation": True,
+                "regex_patterns": {
+                    "logging": ["import\\s+log4j", "logger\\."],
+                    "security": ["password.*log", "encrypt"]
+                },
+                "min_pattern_matches": {
+                    "logging": 5,
+                    "security": 3
+                },
+                "use_llm_analysis": True,
+                "use_git_auth": True,
+                "git_auth_methods": ["token", "ssh"],
+                "max_file_size": 1000000,
+                "include_patterns": ["*.java", "*.py"],
+                "exclude_patterns": ["*.min.js"]
+            }
+        }
+
 # Validation Request Models
 class ValidationRequest(BaseModel):
     checklist_item_id: str
@@ -79,6 +149,7 @@ class AppValidationRequest(BaseModel):
     )
     integrations: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     additional_context: Optional[Dict[str, Any]] = None
+    repository_analysis_config: Optional[RepositoryAnalysisConfig] = None
     
     class Config:
         json_schema_extra = {
@@ -96,6 +167,15 @@ class AppValidationRequest(BaseModel):
                 "additional_context": {
                     "environment": "production",
                     "team": "cloud-platform"
+                },
+                "repository_analysis_config": {
+                    "use_regex_validation": True,
+                    "use_llm_analysis": True,
+                    "use_git_auth": True,
+                    "git_auth_methods": ["token", "ssh"],
+                    "max_file_size": 1000000,
+                    "include_patterns": ["*.java", "*.py"],
+                    "exclude_patterns": ["*.min.js"]
                 }
             }
         }

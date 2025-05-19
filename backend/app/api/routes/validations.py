@@ -60,7 +60,7 @@ async def validate_application(
         WorkflowService.run_validation_workflow,
         db_session=db,
         workflow_id=workflow_id,
-        application=application,
+        application_id=app_id,
         validation_request=validation_request
     )
     
